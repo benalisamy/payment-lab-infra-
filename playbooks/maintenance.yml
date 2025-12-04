@@ -1,1 +1,66 @@
+# playbooks/maintenance.yml
+---
+- name: Patching OS et Rolling Update du Cluster K8s
+  hosts: all
+  become: yes
+  serial: 1  # <--- MAGIE ICI : Un nœud à la fois
+  any_errors_fatal: true # Si un nœud échoue, on arrête tout pour ne pas casser le cluster
 
+  tasks:
+    # 1. CORDON : On empêche de nouveaux pods d'arriver
+    - name: Cordon le noeud (Rendre non planifiable)
+      kubernetes.core.k8s_drain:
+        state: cordon
+        name: "{{ inventory_hostname }}"
+        kubeconfig: /etc/kubernetes/admin.conf
+      delegate_to: "{{ groups['masters'][0] }}" # On exécute la commande depuis le master
+      when: inventory_hostname != groups['masters'][0] # Optionnel : stratégie différente pour le master
+
+    # 2. DRAIN : On évacue les applications proprement
+    - name: Drain le noeud (Évacuation des pods)
+      kubernetes.core.k8s_drain:
+        state: drain
+        name: "{{ inventory_hostname }}"
+        kubeconfig: /etc/kubernetes/admin.conf
+        delete_options:
+          delete_emptydir_data: true
+          ignore_daemonsets: true
+          force: true
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    # 3. PATCH : Mise à jour du système
+    - name: Mise à jour des paquets (Debian/Ubuntu)
+      apt:
+        upgrade: dist
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Vérifier si un redémarrage est requis
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    # 4. REBOOT : Redémarrage sécurisé
+    - name: Redémarrer le nœud si nécessaire
+      reboot:
+        msg: "Reboot pour mise à jour de sécurité"
+        post_reboot_delay: 30
+      when: reboot_required.stat.exists
+
+    # 5. WAIT : Attendre que le nœud soit prêt niveau OS
+    - name: Attendre le retour SSH
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+
+    # 6. UNCORDON : Réintégrer le nœud au cluster
+    - name: Uncordon le noeud (Réactiver)
+      kubernetes.core.k8s_drain:
+        state: uncordon
+        name: "{{ inventory_hostname }}"
+        kubeconfig: /etc/kubernetes/admin.conf
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    - name: Pause pour laisser les pods redémarrer et vérifier la santé
+      pause:
+        seconds: 30
