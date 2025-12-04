@@ -1,0 +1,41 @@
+# Vagrantfile
+Vagrant.configure("2") do |config|
+  
+  # Image de base : Rocky Linux 9 (Stable et proche de la prod RedHat)
+  # Vous pouvez changer pour "generic/debian11" si vous préférez Debian
+  config.vm.box = "generic/rocky9"
+  
+  # Configuration spécifique à KVM/Libvirt
+  config.vm.provider :libvirt do |libvirt|
+    libvirt.memory = 3000 # 1.5 Go RAM par VM (Minimum vital pour K8s)
+    libvirt.cpus = 1
+  end
+
+  # --- VM MASTER ---
+  config.vm.define "k8s-master" do |master|
+    master.vm.hostname = "k8s-master"
+    # Réseau privé pour que les VMs se parlent entre elles
+    master.vm.network "private_network", ip: "192.168.121.10"
+  end
+
+  # --- VM WORKER 1 ---
+  config.vm.define "k8s-worker-1" do |worker1|
+    worker1.vm.hostname = "k8s-worker-1"
+    worker1.vm.network "private_network", ip: "192.168.121.11"
+  end
+
+  # --- VM WORKER 2 ---
+  config.vm.define "k8s-worker-2" do |worker2|
+    worker2.vm.hostname = "k8s-worker-2"
+    worker2.vm.network "private_network", ip: "192.168.121.12"
+  end
+  
+  # Copie automatique de votre clé SSH publique vers les VMs (pour Ansible)
+  config.vm.provision "file", source: "~/.ssh/id_rsa.pub", destination: "/tmp/id_rsa.pub"
+  config.vm.provision "shell", inline: <<-SHELL
+    mkdir -p /home/vagrant/.ssh
+    cat /tmp/id_rsa.pub >> /home/vagrant/.ssh/authorized_keys
+    chmod 600 /home/vagrant/.ssh/authorized_keys
+    chown vagrant:vagrant /home/vagrant/.ssh/authorized_keys
+  SHELL
+end
