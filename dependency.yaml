@@ -1,0 +1,102 @@
+---
+- name: "Setup de la Workstation DevOps (KVM + Vagrant + Tools)"
+  hosts: localhost
+  connection: local
+  become: yes
+  vars:
+    target_user: "{{ user_id | default(lookup('env', 'USER')) }}"
+    vagrant_url: "https://releases.hashicorp.com/vagrant/2.4.9/vagrant_2.4.9-1_amd64.deb"
+
+  tasks:
+    # ---------------------------------------------------------
+    # 1. MISE À JOUR ET DÉPENDANCES
+    # ---------------------------------------------------------
+    - name: "Mise à jour du cache APT"
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: "Installation des pré-requis système"
+      apt:
+        name:
+          - curl
+          - git
+          - wget
+          - vim
+          - build-essential  # Vital pour le plugin vagrant
+          - libvirt-dev      # Vital pour le plugin vagrant
+          - qemu-utils
+        state: present
+
+    # ---------------------------------------------------------
+    # 2. INSTALLATION KVM / LIBVIRT
+    # ---------------------------------------------------------
+    - name: "Installation de KVM et Libvirt"
+      apt:
+        name:
+          - qemu-kvm
+          - libvirt-daemon-system
+          - libvirt-clients
+          - bridge-utils
+          - virt-manager
+        state: present
+
+    - name: "Démarrage du service Libvirt"
+      service:
+        name: libvirtd
+        state: started
+        enabled: yes
+
+    # ---------------------------------------------------------
+    # 3. INSTALLATION DE VAGRANT (METHODE .DEB DIRECTE)
+    # ---------------------------------------------------------
+    - name: "Téléchargement de Vagrant 2.4.9 (.deb)"
+      get_url:
+        url: "{{ vagrant_url }}"
+        dest: "/tmp/vagrant_install.deb"
+        mode: '0644'
+
+    - name: "Installation de Vagrant depuis le fichier local"
+      apt:
+        deb: "/tmp/vagrant_install.deb"
+        state: present
+
+    # ---------------------------------------------------------
+    # 4. CONFIGURATION PLUGIN & UTILISATEUR
+    # ---------------------------------------------------------
+    - name: "Ajout de l'utilisateur {{ target_user }} aux groupes libvirt/kvm"
+      user:
+        name: "{{ target_user }}"
+        groups: libvirt,kvm
+        append: yes
+
+    # Installation du plugin en tant qu'utilisateur (pas root)
+    - name: "Installation du plugin vagrant-libvirt"
+      become: yes
+      become_user: "{{ target_user }}"
+      environment:
+        # Aide à la compilation du plugin
+        CONFIGURE_ARGS: 'with-libvirt-include=/usr/include/libvirt with-libvirt-lib=/usr/lib'
+      command: vagrant plugin install vagrant-libvirt
+      register: plugin_install
+      changed_when: "'Installed the plugin' in plugin_install.stdout"
+      ignore_errors: yes # On ignore s'il est déjà là
+
+    # ---------------------------------------------------------
+    # 5. GÉNÉRATION CLÉ SSH
+    # ---------------------------------------------------------
+    - name: "Génération de la clé SSH"
+      user:
+        name: "{{ target_user }}"
+        generate_ssh_key: yes
+        ssh_key_bits: 4096
+      become: no 
+
+    # ---------------------------------------------------------
+    # 6. KUBECTL
+    # ---------------------------------------------------------
+    - name: "Installation de Kubectl"
+      get_url:
+        url: "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
